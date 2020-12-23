@@ -1,0 +1,139 @@
+#include <AccelStepper.h>
+#include <ezButton.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Battery.h>
+#include <Ewma.h>
+
+// Parameters
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define MOTOR_WHOLE_STEPS 512
+#define MotorInterfaceType 8 // Motor stepping interface. 8 = half step, 4 = full step
+#define MOTOR_STEPS 4096
+#define BATTERY_MIN_V 3000
+#define BATTERY_MAX_V 4200
+#define MAX_SPEED 1024
+
+// Pins
+#define STEPPER_IN1 8
+#define STEPPER_IN2 9
+#define STEPPER_IN3 10
+#define STEPPER_IN4 11
+#define POT_INPUT A0
+#define BATTERY_INPUT A1
+#define BUTTON_INPUT 5
+#define OLED_D1 6 // Purple
+#define OLED_D0 7 // Blue
+#define OLED_DC 12 // Yellow
+#define OLED_CS 4 // Green
+#define OLED_RESET 13 // Grey
+
+// VCC Black
+// GRND White
+
+// Sensors/Displays
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, OLED_D1, OLED_D0, OLED_DC, OLED_RESET, OLED_CS);
+AccelStepper stepper = AccelStepper(MotorInterfaceType, STEPPER_IN1, STEPPER_IN3, STEPPER_IN2, STEPPER_IN4);
+ezButton button(BUTTON_INPUT);
+Ewma filter(0.001);
+Battery battery(BATTERY_MIN_V, BATTERY_MAX_V, BATTERY_INPUT);
+
+// Variables
+float batteryLevel = 100.0;
+int potValue = 0;
+int oldStepperSpeed = 0;
+int stepperSpeed = 0;
+int oldSpeedMultiplier = 1;
+int speedMultiplier = 1;
+
+void setup() {
+  // Begin Serial communication at a baud rate of 9600
+  Serial.begin(9600);
+
+  battery.begin(5000, 0.25, &sigmoidal);
+  stepper.setMaxSpeed(MAX_SPEED);
+  button.setDebounceTime(15);
+  if (!display.begin(SSD1306_SWITCHCAPVCC)) { // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;); // Don't proceed, loop forever
+  }
+
+  // Library initializes this with an Adafruit splash screen.
+  display.display();
+  cleanAndDisplayStaticContent();
+  display.display();
+}
+
+void loop() {
+  button.loop();
+  if (button.isPressed())
+    speedMultiplier *= -1;
+
+  potValue = analogRead(POT_INPUT);
+  if (potValue < 100) {
+    potValue = 0;
+  }
+  stepperSpeed = map(potValue, 0, 4096, 0, MAX_SPEED+1);
+
+  if (stepperSpeed > 0) {
+    stepper.runSpeed();
+  }
+
+  updateDisplay();
+}
+
+void updateDisplay() {
+  int oldSpeed = round((100.0 * oldStepperSpeed) / MAX_SPEED);
+  int newSpeed = round((100.0 * stepperSpeed) / MAX_SPEED);
+  float newBatteryLevel = filter.filter(battery.level());
+  if (abs(oldSpeed - newSpeed) > 1 || oldSpeedMultiplier != speedMultiplier || abs(batteryLevel - newBatteryLevel) > 0.99) {
+    cleanAndDisplayStaticContent();
+
+    // Print speed
+    display.setTextSize(4);
+    display.setCursor(19, 32);
+    display.setTextColor(SSD1306_WHITE);
+    display.println(newSpeed);
+    stepper.setSpeed(stepperSpeed * speedMultiplier);
+
+    // Print CW/CCW
+    display.setTextSize(1);
+    display.setCursor(5, 5);
+    display.setTextColor(SSD1306_WHITE);
+    if (speedMultiplier == 1) {
+      display.println(F("CW"));
+    } else if (speedMultiplier == -1) {
+      display.println(F("CCW"));
+    }
+
+    // Print battery
+    display.setTextSize(1);
+    display.setCursor(100, 5);
+    display.setTextColor(SSD1306_WHITE);
+    display.println((int) newBatteryLevel);
+
+    display.display();
+    oldStepperSpeed = stepperSpeed;
+    oldSpeedMultiplier = speedMultiplier;
+    batteryLevel = newBatteryLevel;
+  }
+}
+
+void cleanAndDisplayStaticContent() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setCursor(50, 5);
+  display.setTextColor(SSD1306_WHITE);
+  display.println(F("Battery:"));
+  display.setCursor(113, 5);
+  display.println(F("%"));
+
+  display.setTextSize(3);
+  display.setCursor(95, 40);
+  display.setTextColor(SSD1306_WHITE);
+  display.println(F("%"));
+}
